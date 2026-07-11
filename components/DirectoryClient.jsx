@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import ServerModal from '@/components/ServerModal';
 import LoadingLogo from '@/components/LoadingLogo';
 import { favorites, searchHistory, stripMarkdown, compareList, MAX_COMPARE } from '@/lib/utils';
@@ -13,6 +13,8 @@ const SORTS = {
   members: (a, b) => (b.memberCount || 0) - (a.memberCount || 0),
   recent: () => 0,
 };
+
+const PAGE_SIZE = 24; // 24 cartes par page (8 rangées de 3 sur grand écran)
 
 // `initialServers` : liste déjà filtrée/triée côté serveur (utilisé par les
 // pages Tendances/Nouveaux). Quand elle est fournie, on l'utilise telle
@@ -35,6 +37,9 @@ export default function DirectoryClient({ initialServers = null, hideBanner = fa
   const [selectedId, setSelectedId] = useState(null);
   const [compareIds, setCompareIds] = useState([]);
   const [showCompare, setShowCompare] = useState(false);
+  const [page, setPage] = useState(1);
+  const gridRef = useRef(null);
+  const isFirstRender = useRef(true);
   const selectedServer = useMemo(
     () => (servers || []).find((s) => s.guildId === selectedId) || null,
     [servers, selectedId]
@@ -113,6 +118,30 @@ export default function DirectoryClient({ initialServers = null, hideBanner = fa
     return [...list].sort(SORTS[sort]);
   }, [servers, query, tag, sort, hideNsfw, favOnly, favIds]);
 
+  // Retour à la page 1 dès que la recherche/les filtres/le tri changent, sinon
+  // on pourrait se retrouver sur une page vide après un nouveau filtrage.
+  useEffect(() => {
+    setPage(1);
+  }, [query, tag, sort, hideNsfw, favOnly]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+
+  // Si la liste rétrécit (nouveau filtre, rafraîchissement des données) et que
+  // la page courante n'existe plus, on revient à la dernière page valide.
+  useEffect(() => {
+    if (page > pageCount) setPage(pageCount);
+  }, [page, pageCount]);
+
+  const pageItems = useMemo(
+    () => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filtered, page]
+  );
+
+  useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
+    gridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [page]);
+
   return (
     <div>
       {!hideBanner && (
@@ -179,7 +208,7 @@ export default function DirectoryClient({ initialServers = null, hideBanner = fa
         </button>
       </div>
 
-      <div className="directory-grid">
+      <div className="directory-grid" ref={gridRef}>
         {error && <div className="empty-state">Impossible de charger l'annuaire pour le moment.</div>}
         {!error && servers === null && <LoadingLogo label="Chargement des serveurs…" />}
         {!error && servers !== null && filtered.length === 0 && (
@@ -187,7 +216,7 @@ export default function DirectoryClient({ initialServers = null, hideBanner = fa
             {favOnly ? "Tu n'as encore aucun serveur en favoris." : 'Aucun serveur ne correspond à votre recherche.'}
           </div>
         )}
-        {filtered.map((s) => (
+        {pageItems.map((s) => (
           <div className="server-card" key={s.guildId} onClick={() => setSelectedId(s.guildId)}>
             <div className="server-card-head">
               <div className="server-avatar">
@@ -249,6 +278,33 @@ export default function DirectoryClient({ initialServers = null, hideBanner = fa
         ))}
       </div>
 
+      {pageCount > 1 && (
+        <div className="pagination">
+          <button className="page-btn" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            ← Précédent
+          </button>
+          {Array.from({ length: pageCount }, (_, i) => i + 1)
+            .filter((p) => p === 1 || p === pageCount || Math.abs(p - page) <= 1)
+            .reduce((acc, p, i, arr) => {
+              if (i > 0 && p - arr[i - 1] > 1) acc.push('…');
+              acc.push(p);
+              return acc;
+            }, [])
+            .map((p, i) =>
+              p === '…' ? (
+                <span key={`gap-${i}`} style={{ color: 'var(--text-faint)', padding: '0 4px' }}>…</span>
+              ) : (
+                <button key={p} className={`page-btn ${p === page ? 'active' : ''}`} onClick={() => setPage(p)}>
+                  {p}
+                </button>
+              )
+            )}
+          <button className="page-btn" disabled={page >= pageCount} onClick={() => setPage((p) => Math.min(pageCount, p + 1))}>
+            Suivant →
+          </button>
+        </div>
+      )}
+
       <ServerModal server={selectedServer} onClose={() => setSelectedId(null)} />
       {reportGuildId && <ReportModal guildId={reportGuildId} onClose={() => setReportGuildId(null)} />}
 
@@ -280,3 +336,4 @@ export default function DirectoryClient({ initialServers = null, hideBanner = fa
     </div>
   );
 }
+
